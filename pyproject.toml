@@ -1,0 +1,27 @@
+[project]
+name = "trip-replanner"
+version = "0.1.0"
+description = "A trip itinerary that replans itself when things go wrong (LangGraph demo)"
+readme = "README.md"
+authors = [
+    { name = "Kirito", email = "nikhilsimontoppo@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.11.0",
+    "langgraph>=1.2.12",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+trip = "trip_replanner.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
