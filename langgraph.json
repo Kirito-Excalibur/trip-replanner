@@ -1,0 +1,20 @@
+{
+  "source": {
+    "kind": "uv",
+    "root": "."
+  },
+  "python_version": "3.12",
+  "graphs": {
+    "trip": "./src/trip_replanner/graph.py:graph"
+  },
+  "auth": {
+    "path": "./src/trip_replanner/auth.py:auth"
+  },
+  "http": {
+    "app": "./src/trip_replanner/webhooks.py:app",
+    "disable_store": true,
+    "disable_mcp": true,
+    "disable_a2a": true
+  },
+  "env": ".env"
+}

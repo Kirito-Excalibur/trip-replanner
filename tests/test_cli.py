@@ -1,25 +1,27 @@
+import json
+
+from trip_replanner.auth import hash_token
 from trip_replanner.cli import main
 
 
-def test_full_session_with_time_travel(tmp_path, capsys):
-    db = str(tmp_path / "trips.sqlite")
-    run = lambda *args: main(["--db", db, *args])  # noqa: E731
-
-    assert run("new") == 0
-    assert run("delay", "flight", "30") == 1  # must approve first
-    assert run("approve") == 0
-    assert run("delay", "flight", "120", "--at", "07:40") == 0
-    assert run("choose", "A") == 0
-    capsys.readouterr()
-
-    assert run("rechoose", "B") == 0
+def test_token_command_prints_a_matching_hash(capsys):
+    assert main(["token", "alice"]) == 0
     out = capsys.readouterr().out
-    assert "Applied B: Skip Coffee in Baixa." in out
+    token = out.split("TRIP_TOKEN=")[1].split()[0]
+    assert f"alice:{hash_token(token)}" in out
 
-    assert run("history") == 0
-    history = capsys.readouterr().out
-    # Only the current branch: B's lunch change is there, A's (13:20–14:30) is not.
-    assert "12:50–14:05" in history and "13:20–14:30" not in history
 
-    assert run("end") == 0
-    assert "Trip finished." in capsys.readouterr().out
+def test_commands_need_a_token(capsys):
+    assert main(["show"]) == 1
+    assert "set TRIP_TOKEN" in capsys.readouterr().err
+
+
+def test_invalid_plans_fail_before_reaching_the_server(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TRIP_TOKEN", "anything")
+    monkeypatch.setenv("TRIP_SERVER_URL", "http://127.0.0.1:9")  # nothing listens here
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"trip": {"name": "x"}, "items": [{"id": "a", "title": "A", "kind": "meal",
+                                                                  "start": "2026-10-14T12:00", "end": "2026-10-14T13:00",
+                                                                  "location": "Here"}]}))
+    assert main(["new", "--file", str(bad)]) == 1
+    assert "UTC offset" in capsys.readouterr().err

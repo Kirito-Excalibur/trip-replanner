@@ -66,3 +66,11 @@ def test_bad_replies_are_ignored(trip):
     snap = trip(event("delay", "nonexistent", 10))
     assert snap.next == ("choose",) and len(snap.values["options"]) == 2
     assert snap.values["log"][-1].startswith("Ignored event")
+
+
+def test_garbage_replies_never_move_the_trip(trip):
+    snap = trip({"type": "end", "sneaky": True})
+    assert snap.next == ("await_event",)
+    assert snap.values["log"][-1] == "Ignored reply: end.sneaky: Extra inputs are not permitted."
+    assert trip("not even a dict").next == ("await_event",)
+    assert trip({"type": "end"}).next == ()  # only a well-formed reply ends it

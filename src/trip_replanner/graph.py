@@ -29,9 +29,10 @@ from typing import Annotated, Literal, NotRequired, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Overwrite, Send, interrupt
 
-from .models import Event, Item, Option, Recommendation, Trip, duration, parse
-from .ranker import rank_options
-from .solver import (
+from trip_replanner.models import Event, Item, Option, Recommendation, Trip, parse
+from trip_replanner.ranker import rank_options
+from trip_replanner.schemas import parse_plan, parse_reply
+from trip_replanner.solver import (
     STRATEGIES,
     apply_event,
     describe_event,
@@ -68,27 +69,33 @@ class ProposeTask(TypedDict):
 
 
 def plan_trip(state: TripState) -> dict:
-    items = {}
-    for k, it in state["items"].items():
-        it = {"depends_on": [], "status": "planned", "fixed": False, "priority": 3, **it, "id": k}
-        it.setdefault("min_minutes", duration(it))
-        items[k] = it
-    problems = find_violations(items, state["trip"])
+    # The plan arrives from outside, so validate the shape here and the logic below.
+    trip, items = parse_plan({"trip": state.get("trip"), "items": state.get("items")})
+    problems = find_violations(items, trip)  # also rejects dependency cycles
     if problems:
         raise ValueError("The starting plan doesn't work: " + "; ".join(p["text"] for p in problems))
-    return {"items": items, "log": [f"Loaded {len(items)} plans for {state['trip']['name']}."]}
+    return {"trip": trip, "items": items, "log": [f"Loaded {len(items)} plans for {trip['name']}."]}
 
 
-def confirm_plan(state: TripState) -> Command[Literal["await_event", "__end__"]]:
-    reply = interrupt({"waiting_for": "approval"})
-    if reply.get("type") == "approve":
+def _ignored(node: str, error: str) -> Command:
+    """Invalid resume payloads never move the trip; the node just waits again."""
+    return Command(goto=node, update={"log": [f"Ignored reply: {error}."]})
+
+
+def confirm_plan(state: TripState) -> Command[Literal["await_event", "confirm_plan", "__end__"]]:
+    reply, error = parse_reply(interrupt({"waiting_for": "approval"}), {"approve", "reject"})
+    if error:
+        return _ignored("confirm_plan", error)
+    if reply["type"] == "approve":
         return Command(goto="await_event", update={"log": ["Plan approved. Watching for disruptions."]})
     return Command(goto=END, update={"log": ["Plan rejected."]})
 
 
-def await_event(state: TripState) -> Command[Literal["assess_impact", "__end__"]]:
-    reply = interrupt({"waiting_for": "event"})
-    if reply.get("type") == "event":
+def await_event(state: TripState) -> Command[Literal["assess_impact", "await_event", "__end__"]]:
+    reply, error = parse_reply(interrupt({"waiting_for": "event"}), {"event", "end"})
+    if error:
+        return _ignored("await_event", error)
+    if reply["type"] == "event":
         return Command(goto="assess_impact", update={"event": reply["event"]})
     return Command(goto=END, update={"log": ["Trip finished."]})
 
@@ -184,15 +191,18 @@ def make_validate_and_rank(ranker: Callable[..., Recommendation]):
 
 
 def choose(state: TripState) -> Command[Literal["assess_impact", "apply_and_notify", "choose"]]:
-    reply = interrupt({"waiting_for": "choice", "options": [o["id"] for o in state["options"]]})
-    kind = reply.get("type")
-    if kind == "event":  # another disruption arrived while you were deciding
+    offered = [o["id"] for o in state["options"]]
+    reply, error = parse_reply(interrupt({"waiting_for": "choice", "options": offered}),
+                               {"event", "choose", "dismiss"})
+    if error:
+        return _ignored("choose", error)
+    if reply["type"] == "event":  # another disruption arrived while you were deciding
         return Command(goto="assess_impact", update={"event": reply["event"]})
-    if kind == "dismiss":
+    if reply["type"] == "dismiss":
         return Command(goto="apply_and_notify", update={"chosen": None})
-    if kind == "choose" and reply.get("option_id") in {o["id"] for o in state["options"]}:
-        return Command(goto="apply_and_notify", update={"chosen": reply["option_id"]})
-    return Command(goto="choose", update={"log": [f"Ignored reply {reply!r}; still waiting for a choice."]})
+    if reply["option_id"] not in offered:
+        return _ignored("choose", f"there is no option {reply['option_id']}")
+    return Command(goto="apply_and_notify", update={"chosen": reply["option_id"]})
 
 
 def apply_and_notify(state: TripState) -> dict:
@@ -227,3 +237,8 @@ def build_graph(checkpointer=None, ranker: Callable[..., Recommendation] = rank_
     g.add_edge("validate_and_rank", "choose")
     g.add_edge("apply_and_notify", "await_event")
     return g.compile(checkpointer=checkpointer)
+
+
+# Entry point for the Agent Server (see langgraph.json). The server supplies the
+# checkpointer (Postgres on LangSmith Deployment), so none is attached here.
+graph = build_graph()

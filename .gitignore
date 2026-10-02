@@ -4,3 +4,4 @@ __pycache__/
 *.sqlite-*
 .pytest_cache/
 .env
+.langgraph_api/
